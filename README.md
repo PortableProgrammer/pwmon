@@ -65,7 +65,7 @@ submitted at 2022-01-11 14:00:42.418491 return code 0
 ```
 
 ## Getting data from New Relic
-There's a lot.  Like, a lot.  One sample query to get you started:
+There's a lot you can do once your data is in New Relic.  Like, a lot.  One sample query to get you started:
 
 `FROM Metric SELECT average(solar.battery_charge_pct) TIMESERIES SINCE 1 week ago`
 
