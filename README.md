@@ -11,7 +11,8 @@ The other four are to make it easy to run in a container. This is how I do it.
 
 `Makefile` is because I like shortcuts.  `make image` and `make container` are the two rules you want.
 
-`env.list` is the list of environment variables `pwmon.py` wants to see in order to run.  If you want to run `pwmon.py` from the CLI, one [neat trick](https://stackoverflow.com/q/19331497) is
+`env.list` is the list of environment variables `pwmon.py` wants to see in order to run.  
+If you want to run `pwmon.py` from the CLI, one [good trick](https://stackoverflow.com/q/19331497) is
 
 ```
 export $(grep -v '^#' env.list | xargs)
