@@ -19,7 +19,7 @@ export $(grep -v '^#' env.list | xargs)
 pwmon.py
 ```
 
-`requirements.txt` pulls in `tenacity` (a retry library - the Powerwall API has some atrociously low rate-limit) and `tesla_powerwall`.
+`requirements.txt` pulls in `tenacity` (a retry library - the Powerwall API has some atrociously low rate-limit), `tesla_powerwall`, and `python-dotenv`.
 
 
 This code is licensed under Apache 2.0. Essentially - do what you want with it but neither I nor New Relic are to be held liable for it. This is hacked-together demo code and it works for me at home but that's as far as I've taken it. 
