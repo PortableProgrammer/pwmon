@@ -13,10 +13,15 @@ from pprint import pprint as pp
 
 import requests
 import tenacity
+from dotenv import load_dotenv
 from tesla_powerwall import Powerwall, MeterType
 
 
-# this script expects four environment variables are set
+##### environment variables
+# load environment variables from a file if they're there
+load_dotenv('env.list', override=False)
+
+# this script expects five environment variables to be set
 # New Relic key
 INSIGHTS_API_KEY = os.environ.get('INSIGHTS_API_KEY')
 
@@ -24,15 +29,19 @@ INSIGHTS_API_KEY = os.environ.get('INSIGHTS_API_KEY')
 ZIPSTRING = f"{os.environ.get('ZIP')},us"
 WEATHER_KEY = os.environ.get("WEATHER_KEY")
 
+# powerwall password
+PW_PASS = os.environ.get("PW_PASS")
 
 # Am I running as a service?  Part of a hack to let me run via CLI.
 AS_SERVICE = os.environ.get('AS_SERVICE')
+##### end environment variables
 
+
+
+##### constants
 # How often does the script poll when run as a service?
+#  this is not an environment variable
 POLL_INTERVAL = 60
-
-# powerwall password
-PW_PASS = os.environ.get("PW_PASS")
 
 # powerwall hostname or IP.
 # The powerwall's self-signed certificate only responds to 
@@ -48,6 +57,7 @@ HEADER = {
     'Content-Type': 'application/json',
     'Api-Key': INSIGHTS_API_KEY,
 }
+##### end constants
 
 
 def get_now():
