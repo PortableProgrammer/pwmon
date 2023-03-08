@@ -14,41 +14,44 @@ from pprint import pprint as pp
 import requests
 import tenacity
 from dotenv import load_dotenv
-from tesla_powerwall import Powerwall, MeterType
+from tesla_powerwall.powerwall import Powerwall
+from tesla_powerwall.const import MeterType
 
 
 ##### environment variables
 # load environment variables from a file if they're there
 load_dotenv('env.list', override=False)
 
-# this script expects five environment variables to be set
+# this script expects these environment variables to be set
 # New Relic key
 INSIGHTS_API_KEY = os.environ.get('INSIGHTS_API_KEY')
 
-# ZIPSTRING is for the wether API.  In the US it takes the form '<ZIPCODE>, us'
-ZIPSTRING = f"{os.environ.get('ZIP')},us"
-WEATHER_KEY = os.environ.get("WEATHER_KEY")
+# Weather lat/long and key
+WEATHER_LAT = os.environ.get('WEATHER_LAT')
+WEATHER_LON = os.environ.get('WEATHER_LON')
+WEATHER_KEY = os.environ.get('WEATHER_KEY')
+
+# powerwall username
+PW_USER = os.environ.get('PW_USER')
 
 # powerwall password
-PW_PASS = os.environ.get("PW_PASS")
+PW_PASS = os.environ.get('PW_PASS')
 
 # Am I running as a service?  Part of a hack to let me run via CLI.
 AS_SERVICE = os.environ.get('AS_SERVICE')
-##### end environment variables
 
-
-
-##### constants
 # How often does the script poll when run as a service?
-#  this is not an environment variable
-POLL_INTERVAL = 60
+POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL'))
 
 # powerwall hostname or IP.
 # The powerwall's self-signed certificate only responds to 
 # hostnamnes "powerwall", "teg", or "powerpack", and of course you have to have DNS set up properly.
 # IP addresses work, too.
-PW_ADDR = 'powerwall'
+PW_ADDR =  os.environ.get("PW_ADDR")
 
+##### end environment variables
+
+##### constants
 # URL to post to
 URL = 'https://metric-api.newrelic.com/metric/v1'
 
@@ -81,13 +84,12 @@ def post_metrics(data):
 #  because the gateway is very slow to respond
 #  and it has some absurdly low rate limit
 
-
 @tenacity.retry(stop=tenacity.stop_after_attempt(7),
                 wait=tenacity.wait_random(min=3, max=7))
 def get_pw():
     """Return a Powerwall connection object."""
     pw = Powerwall(PW_ADDR)
-    pw.login(PW_PASS)
+    loginResult = pw.login(PW_PASS, PW_USER)
     return pw
 
 
@@ -100,9 +102,10 @@ def connect():
 @tenacity.retry(stop=tenacity.stop_after_attempt(7),
                 wait=tenacity.wait_random(min=3, max=7))
 def get_weather():
-    """Return weather for a given zipstring."""
+    """Return weather for a given lat/lon."""
     params = {
-        'zip': ZIPSTRING,
+        'lat': WEATHER_LAT,
+        'lon': WEATHER_LON,
         'appid': WEATHER_KEY,
         'units': 'imperial',
     }
@@ -120,11 +123,11 @@ def get_data():
     # worth it.
     pw, m = connect()
 
-    # # WHY DO I NEED TO DO THIS?  I SWEAR THIS USED TO WORK.
-    m.battery = m.get_meter(MeterType.BATTERY)
-    m.load = m.get_meter(MeterType.LOAD)
-    m.site = m.get_meter(MeterType.SITE)
-    m.solar = m.get_meter(MeterType.SOLAR)
+    # Get a copy of each meter
+    batteryMeter = m.get_meter(MeterType.BATTERY)
+    loadMeter = m.get_meter(MeterType.LOAD)
+    siteMeter = m.get_meter(MeterType.SITE)
+    solarMeter = m.get_meter(MeterType.SOLAR)
 
     weather = get_weather()
 
@@ -149,27 +152,27 @@ def get_data():
     weather['sys']['sunrise'] *= 1000
     weather['sys']['sunset'] *= 1000
     if now > weather['sys']['sunrise'] and now < weather['sys']['sunset']:
-        is_sun_up = True
+        is_daytime = True
     else:
-        is_sun_up = False
+        is_daytime = False
 
     metric_data = {
         'solar': [
             ('battery_charge_pct', round(pw.get_charge(), 1)),
-            ('battery.imported', m.battery.energy_imported),
-            ('battery.exported', m.battery.energy_exported),
-            ('house.imported', m.load.energy_imported),
-            ('house.exported', m.load.energy_exported),
-            ('grid.imported', m.site.energy_imported),
-            ('grid.exported', m.site.energy_exported),
-            ('solar.imported', m.solar.energy_imported),
-            ('solar.exported', m.solar.energy_exported),
+            ('battery.imported', batteryMeter.energy_imported),
+            ('battery.exported', batteryMeter.energy_exported),
+            ('house.imported', loadMeter.energy_imported),
+            ('house.exported', loadMeter.energy_exported),
+            ('grid.imported', siteMeter.energy_imported),
+            ('grid.exported', siteMeter.energy_exported),
+            ('solar.imported', solarMeter.energy_imported),
+            ('solar.exported', solarMeter.energy_exported),
         ],
         'weather': [
             ('cloud_coverage_pct', weather['clouds']['all']),
             ('visibility', weather['visibility']),
             ('temperature', weather['main']['temp']),
-            ('is_sun_up', is_sun_up),
+            ('is_daytime', is_daytime),
         ]
     }
 
@@ -195,10 +198,10 @@ def get_data():
     to_solar = make_gauge('solar.to_solar', 0)
     from_solar = make_gauge('solar.from_solar', 0)
 
-    if m.solar.instant_power > 0:
-        from_solar = make_gauge('solar.from_solar', m.solar.instant_power)
-    elif m.solar.instant_power < 0:
-        to_solar = make_gauge('solar.to_solar', abs(m.solar.instant_power))
+    if solarMeter.instant_power > 0:
+        from_solar = make_gauge('solar.from_solar', solarMeter.instant_power)
+    elif solarMeter.instant_power < 0:
+        to_solar = make_gauge('solar.to_solar', abs(solarMeter.instant_power))
     data['metrics'].append(to_solar)
     data['metrics'].append(from_solar)
 
@@ -206,10 +209,10 @@ def get_data():
     # 'from_grid',
     to_grid = make_gauge('solar.to_grid', 0)
     from_grid = make_gauge('solar.from_grid', 0)
-    if m.site.instant_power > 0:
-        from_grid = make_gauge('solar.from_grid', m.site.instant_power)
-    elif m.site.instant_power < 0:
-        to_grid = make_gauge('solar.to_grid', abs(m.site.instant_power))
+    if siteMeter.instant_power > 0:
+        from_grid = make_gauge('solar.from_grid', siteMeter.instant_power)
+    elif siteMeter.instant_power < 0:
+        to_grid = make_gauge('solar.to_grid', abs(siteMeter.instant_power))
     data['metrics'].append(to_grid)
     data['metrics'].append(from_grid)
 
@@ -217,10 +220,10 @@ def get_data():
     # 'from_house',
     to_house = make_gauge('solar.to_house', 0)
     from_house = make_gauge('solar.from_house', 0)
-    if m.load.instant_power > 0:
-        to_house = make_gauge('solar.to_house', m.load.instant_power)
-    elif m.load.instant_power < 0:
-        from_house = make_gauge('solar.from_house', abs(m.load.instant_power))
+    if loadMeter.instant_power > 0:
+        to_house = make_gauge('solar.to_house', loadMeter.instant_power)
+    elif loadMeter.instant_power < 0:
+        from_house = make_gauge('solar.from_house', abs(loadMeter.instant_power))
     data['metrics'].append(to_house)
     data['metrics'].append(from_house)
 
@@ -228,12 +231,12 @@ def get_data():
     # 'from_battery',
     to_battery = make_gauge('solar.to_battery', 0)
     from_battery = make_gauge('solar.from_battery', 0)
-    if m.battery.instant_power > 0:
+    if batteryMeter.instant_power > 0:
         from_battery = make_gauge(
-            'solar.from_battery', m.battery.instant_power)
-    elif m.battery.instant_power < 0:
+            'solar.from_battery', batteryMeter.instant_power)
+    elif batteryMeter.instant_power < 0:
         to_battery = make_gauge(
-            'solar.to_battery', abs(m.battery.instant_power))
+            'solar.to_battery', abs(batteryMeter.instant_power))
     data['metrics'].append(to_battery)
     data['metrics'].append(from_battery)
 
@@ -275,4 +278,4 @@ if __name__ == "__main__":
         print('submitted at', dt.now(), "return code", ret)
         if not AS_SERVICE:
             run_from_cli()
-        time.sleep(60)
+        time.sleep(POLL_INTERVAL)
