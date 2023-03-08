@@ -1,2 +1,5 @@
 PRIVATE.env.list
 PUBLIC.env.list
+.vscode/
+.devcontainer/
+.DS_Store

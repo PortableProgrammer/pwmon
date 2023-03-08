@@ -1,5 +1,4 @@
 FROM python:slim
-MAINTAINER eosborne@newrelic.com
 RUN apt-get update && apt-get install vim -y && apt-get install git -y
 RUN python3 -m pip install --upgrade pip
 
