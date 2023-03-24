@@ -1,0 +1,405 @@
+{
+    "name": "Tesla",
+    "description": null,
+    "permissions": "PUBLIC_READ_WRITE",
+    "pages": [
+      {
+        "name": "Tesla",
+        "description": null,
+        "widgets": [
+          {
+            "title": "Power Distribution",
+            "layout": {
+              "column": 1,
+              "row": 1,
+              "width": 10,
+              "height": 4
+            },
+            "linkedEntityGuids": null,
+            "visualization": {
+              "id": "viz.line"
+            },
+            "rawConfiguration": {
+              "colors": {
+                "seriesOverrides": [
+                  {
+                    "color": "#00f900",
+                    "seriesName": "To Battery"
+                  },
+                  {
+                    "color": "#919191",
+                    "seriesName": "To Grid"
+                  },
+                  {
+                    "color": "#d29d00",
+                    "seriesName": "From Solar"
+                  },
+                  {
+                    "color": "#919191",
+                    "seriesName": "From Grid"
+                  },
+                  {
+                    "color": "#00f900",
+                    "seriesName": "From Battery"
+                  },
+                  {
+                    "color": "#3a88fe",
+                    "seriesName": "House Load"
+                  }
+                ]
+              },
+              "facet": {
+                "showOtherSeries": false
+              },
+              "legend": {
+                "enabled": true
+              },
+              "nrqlQueries": [
+                {
+                  "accountIds": [
+                    9999999
+                  ],
+                  "query": "FROM Metric SELECT average(solar.from_solar) AS 'From Solar', average(solar.from_grid) AS 'From Grid', average(solar.from_battery) AS 'From Battery', average(solar.to_house) AS 'House Load' TIMESERIES 5 minutes SINCE today WITH TIMEZONE 'America/Denver'"
+                },
+                {
+                  "accountIds": [
+                    9999999
+                  ],
+                  "query": "FROM Metric SELECT average(solar.to_battery) * -1 AS 'To Battery', average(solar.to_grid) * -1 AS 'To Grid' TIMESERIES 5 minutes SINCE today WITH TIMEZONE 'America/Denver'"
+                }
+              ],
+              "nullValues": {
+                "nullValue": "remove"
+              },
+              "platformOptions": {
+                "ignoreTimeRange": false
+              },
+              "yAxisLeft": {
+                "zero": false
+              }
+            }
+          },
+          {
+            "title": "Renewable Percent",
+            "layout": {
+              "column": 11,
+              "row": 1,
+              "width": 2,
+              "height": 2
+            },
+            "linkedEntityGuids": null,
+            "visualization": {
+              "id": "dc5b694f-9125-4c64-8e4e-c52e604c8088.circular-progress-bar"
+            },
+            "rawConfiguration": {
+              "nrqlQueries": [
+                {
+                  "accountId": 9999999,
+                  "query": "FROM Metric SELECT ((latest(solar.solar.exported) - earliest(solar.solar.exported)) - (latest(solar.battery.imported) - earliest(solar.battery.imported)) + (latest(solar.battery.exported) - earliest(solar.battery.exported))) / (latest(solar.house.imported) - earliest(solar.house.imported)) AS 'Renewable Percent' WITH TIMEZONE 'America/Denver' SINCE today"
+                }
+              ],
+              "thresholds": {
+                "criticalThreshold": null,
+                "highValuesAreSuccess": null
+              }
+            }
+          },
+          {
+            "title": "Battery Charge",
+            "layout": {
+              "column": 11,
+              "row": 3,
+              "width": 2,
+              "height": 2
+            },
+            "linkedEntityGuids": null,
+            "visualization": {
+              "id": "dc5b694f-9125-4c64-8e4e-c52e604c8088.circular-progress-bar"
+            },
+            "rawConfiguration": {
+              "nrqlQueries": [
+                {
+                  "accountId": 9999999,
+                  "query": "SELECT latest(solar.battery_charge_pct) / 100 AS 'Battery Charge' FROM Metric"
+                }
+              ],
+              "thresholds": {
+                "criticalThreshold": "10",
+                "highValuesAreSuccess": true
+              }
+            }
+          },
+          {
+            "title": "Solar (Current)",
+            "layout": {
+              "column": 1,
+              "row": 5,
+              "width": 3,
+              "height": 3
+            },
+            "linkedEntityGuids": null,
+            "visualization": {
+              "id": "viz.billboard"
+            },
+            "rawConfiguration": {
+              "dataFormatters": [
+                {
+                  "name": "Solar (W)",
+                  "type": "humanized"
+                }
+              ],
+              "facet": {
+                "showOtherSeries": false
+              },
+              "nrqlQueries": [
+                {
+                  "accountIds": [
+                    9999999
+                  ],
+                  "query": "FROM Metric SELECT latest(solar.from_solar) AS 'Solar (W)' SINCE 2 minutes ago"
+                }
+              ],
+              "platformOptions": {
+                "ignoreTimeRange": true
+              },
+              "thresholds": [
+                {
+                  "alertSeverity": "WARNING",
+                  "value": 1500
+                },
+                {
+                  "alertSeverity": "CRITICAL",
+                  "value": 600
+                }
+              ]
+            }
+          },
+          {
+            "title": "Battery (Current)",
+            "layout": {
+              "column": 4,
+              "row": 5,
+              "width": 3,
+              "height": 3
+            },
+            "linkedEntityGuids": null,
+            "visualization": {
+              "id": "viz.billboard"
+            },
+            "rawConfiguration": {
+              "dataFormatters": [
+                {
+                  "name": "Battery (W)",
+                  "type": "humanized"
+                }
+              ],
+              "facet": {
+                "showOtherSeries": false
+              },
+              "nrqlQueries": [
+                {
+                  "accountIds": [
+                    9999999
+                  ],
+                  "query": "FROM Metric SELECT latest(solar.from_battery) - latest(solar.to_battery) AS 'Battery (W)' SINCE 2 minutes ago"
+                }
+              ],
+              "platformOptions": {
+                "ignoreTimeRange": true
+              },
+              "thresholds": [
+                {
+                  "alertSeverity": "WARNING",
+                  "value": 1500
+                },
+                {
+                  "alertSeverity": "CRITICAL",
+                  "value": 4000
+                }
+              ]
+            }
+          },
+          {
+            "title": "Grid (Current)",
+            "layout": {
+              "column": 7,
+              "row": 5,
+              "width": 3,
+              "height": 3
+            },
+            "linkedEntityGuids": null,
+            "visualization": {
+              "id": "viz.billboard"
+            },
+            "rawConfiguration": {
+              "dataFormatters": [
+                {
+                  "name": "Grid (W)",
+                  "type": "humanized"
+                }
+              ],
+              "facet": {
+                "showOtherSeries": false
+              },
+              "nrqlQueries": [
+                {
+                  "accountIds": [
+                    9999999
+                  ],
+                  "query": "FROM Metric SELECT latest(solar.from_grid) - latest(solar.to_grid) AS 'Grid (W)' SINCE 2 minutes ago"
+                }
+              ],
+              "platformOptions": {
+                "ignoreTimeRange": true
+              },
+              "thresholds": [
+                {
+                  "alertSeverity": "WARNING",
+                  "value": 50
+                },
+                {
+                  "alertSeverity": "CRITICAL",
+                  "value": 1500
+                }
+              ]
+            }
+          },
+          {
+            "title": "House (Current)",
+            "layout": {
+              "column": 10,
+              "row": 5,
+              "width": 3,
+              "height": 3
+            },
+            "linkedEntityGuids": null,
+            "visualization": {
+              "id": "viz.billboard"
+            },
+            "rawConfiguration": {
+              "dataFormatters": [
+                {
+                  "name": "House (W)",
+                  "type": "humanized"
+                }
+              ],
+              "facet": {
+                "showOtherSeries": false
+              },
+              "nrqlQueries": [
+                {
+                  "accountIds": [
+                    9999999
+                  ],
+                  "query": "FROM Metric SELECT latest(solar.to_house) AS 'House (W)' SINCE 2 minutes ago"
+                }
+              ],
+              "platformOptions": {
+                "ignoreTimeRange": true
+              },
+              "thresholds": [
+                {
+                  "alertSeverity": "WARNING",
+                  "value": 1500
+                },
+                {
+                  "alertSeverity": "CRITICAL",
+                  "value": 5000
+                }
+              ]
+            }
+          },
+          {
+            "title": "Net Energy Usage",
+            "layout": {
+              "column": 1,
+              "row": 8,
+              "width": 12,
+              "height": 2
+            },
+            "linkedEntityGuids": null,
+            "visualization": {
+              "id": "viz.billboard"
+            },
+            "rawConfiguration": {
+              "dataFormatters": [
+                {
+                  "name": "House Used (Wh)",
+                  "type": "humanized"
+                },
+                {
+                  "name": "Net Grid (Wh)",
+                  "type": "humanized"
+                },
+                {
+                  "name": "Net Renewable (Wh)",
+                  "type": "humanized"
+                },
+                {
+                  "name": "Battery Used (Wh)",
+                  "type": "humanized"
+                },
+                {
+                  "name": "Net Solar (Wh)",
+                  "type": "humanized"
+                }
+              ],
+              "facet": {
+                "showOtherSeries": false
+              },
+              "nrqlQueries": [
+                {
+                  "accountIds": [
+                    9999999
+                  ],
+                  "query": "FROM Metric SELECT (latest(solar.solar.exported) - earliest(solar.solar.exported)) - (latest(solar.battery.imported) - earliest(solar.battery.imported)) AS 'Net Solar (Wh)', latest(solar.battery.exported) - earliest(solar.battery.exported) AS 'Battery Used (Wh)', (latest(solar.solar.exported) - earliest(solar.solar.exported)) - (latest(solar.battery.imported) - earliest(solar.battery.imported)) + latest(solar.battery.exported) - earliest(solar.battery.exported) AS 'Net Renewable (Wh)', (latest(solar.grid.imported) - earliest(solar.grid.imported)) - (latest(solar.grid.exported) - earliest(solar.grid.exported)) AS 'Net Grid (Wh)', latest(solar.house.imported) - earliest(solar.house.imported) AS 'House Used (Wh)' WITH TIMEZONE 'America/Denver' SINCE today"
+                }
+              ],
+              "platformOptions": {
+                "ignoreTimeRange": false
+              }
+            }
+          },
+          {
+            "title": "Weather",
+            "layout": {
+              "column": 1,
+              "row": 10,
+              "width": 12,
+              "height": 3
+            },
+            "linkedEntityGuids": null,
+            "visualization": {
+              "id": "viz.line"
+            },
+            "rawConfiguration": {
+              "facet": {
+                "showOtherSeries": false
+              },
+              "legend": {
+                "enabled": true
+              },
+              "nrqlQueries": [
+                {
+                  "accountIds": [
+                    9999999
+                  ],
+                  "query": "FROM Metric SELECT average(weather.temperature) AS 'Temp', average(weather.cloud_coverage_pct) as 'Cloud Coverage' TIMESERIES 5 minutes WITH TIMEZONE 'America/Denver' SINCE today"
+                }
+              ],
+              "nullValues": {
+                "nullValue": "remove"
+              },
+              "platformOptions": {
+                "ignoreTimeRange": false
+              },
+              "yAxisLeft": {
+                "zero": true
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "variables": []
+  }
