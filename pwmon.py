@@ -16,6 +16,7 @@ import tenacity
 from dotenv import load_dotenv
 from tesla_powerwall.powerwall import Powerwall
 from tesla_powerwall.const import MeterType
+from tesla_powerwall.responses import Meter
 
 
 ##### environment variables
@@ -188,57 +189,11 @@ def get_data():
             m_name = f'{k}.{m_name}'
             data['metrics'].append(make_gauge(m_name, m_value))
 
-    # the to_* and from_* stuff is weird
-    #  positive numbers are towards the house
-    #  negative numbers are away from the house
-    # these four blocks should be a function
-
-    # 'to_solar',
-    # 'from_solar',
-    to_solar = make_gauge('solar.to_solar', 0)
-    from_solar = make_gauge('solar.from_solar', 0)
-
-    if solarMeter.instant_power > 0:
-        from_solar = make_gauge('solar.from_solar', solarMeter.instant_power)
-    elif solarMeter.instant_power < 0:
-        to_solar = make_gauge('solar.to_solar', abs(solarMeter.instant_power))
-    data['metrics'].append(to_solar)
-    data['metrics'].append(from_solar)
-
-    # 'to_grid',
-    # 'from_grid',
-    to_grid = make_gauge('solar.to_grid', 0)
-    from_grid = make_gauge('solar.from_grid', 0)
-    if siteMeter.instant_power > 0:
-        from_grid = make_gauge('solar.from_grid', siteMeter.instant_power)
-    elif siteMeter.instant_power < 0:
-        to_grid = make_gauge('solar.to_grid', abs(siteMeter.instant_power))
-    data['metrics'].append(to_grid)
-    data['metrics'].append(from_grid)
-
-    # 'to_house',
-    # 'from_house',
-    to_house = make_gauge('solar.to_house', 0)
-    from_house = make_gauge('solar.from_house', 0)
-    if loadMeter.instant_power > 0:
-        to_house = make_gauge('solar.to_house', loadMeter.instant_power)
-    elif loadMeter.instant_power < 0:
-        from_house = make_gauge('solar.from_house', abs(loadMeter.instant_power))
-    data['metrics'].append(to_house)
-    data['metrics'].append(from_house)
-
-    # 'to_battery',
-    # 'from_battery',
-    to_battery = make_gauge('solar.to_battery', 0)
-    from_battery = make_gauge('solar.from_battery', 0)
-    if batteryMeter.instant_power > 0:
-        from_battery = make_gauge(
-            'solar.from_battery', batteryMeter.instant_power)
-    elif batteryMeter.instant_power < 0:
-        to_battery = make_gauge(
-            'solar.to_battery', abs(batteryMeter.instant_power))
-    data['metrics'].append(to_battery)
-    data['metrics'].append(from_battery)
+    data['metrics'].extend(make_meter_gauges('solar', solarMeter))
+    data['metrics'].extend(make_meter_gauges('grid', siteMeter))
+    # The Load/House meter is inverted (e.g. positive is "to" and negative is "from")
+    data['metrics'].extend(make_meter_gauges('house', loadMeter, True))
+    data['metrics'].extend(make_meter_gauges('battery', batteryMeter))
 
     reserve = make_gauge('solar.reserve_pct',
                          pw.get_backup_reserve_percentage())
@@ -251,6 +206,18 @@ def get_data():
     data['metrics'].append(remaining)
 
     return data
+
+def make_meter_gauges(name:str, meter:Meter, invertDirection:bool=False, type:str='gauge') -> list:
+    """Return a list of gauges for a supplied Meter"""
+    gauges = [
+        make_gauge('solar.to_' + name, 0, type),
+        make_gauge('solar.from_' + name, 0, type)
+    ]
+
+    activeGauge = 1 if meter.instant_power > 0 and not invertDirection else 0
+    gauges[activeGauge]['value'] = abs(meter.instant_power)
+
+    return gauges
 
 
 def make_gauge(name, value, m_type='gauge'):
