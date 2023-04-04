@@ -12,8 +12,6 @@ The other files to make it easy to run in a container. This is how I do it.
 
 `Dockerfile` is the Dockerfile. Not much to say about this one.
 
-`Makefile` is because I like shortcuts.  `make image` and `make container` are the two rules you want.
-
 `env.list` is the list of environment variables `pwmon.py` wants to see in order to run.  
 If you want to run `pwmon.py` from the CLI, one [good trick](https://stackoverflow.com/q/19331497) is
 
@@ -41,32 +39,6 @@ submitted at 2022-01-11 08:57:20.332818 return code 0
 ...
 ```
 
-### From Docker
-
-Build the image:
-
-```shell
-user@host:~/prog/pwmon$ make image
-.....
-REPOSITORY   TAG       IMAGE ID       CREATED        SIZE
-pwmon        latest    de412555d252   17 hours ago 277MB                                                                                                                                      
-```
-
-Start a container:
-
-```shell
-user@host:~/prog/pwmon$ make container
-docker run -d --restart unless-stopped --name pwmon --env-file env.list pwmon
-974d312084d6ab79b65813dc485d18f3a110bcadc73967480b9273d9eadf3da5
-```
-
-Check that it works (you get one log line per minute):
-
-```shell
-user@host:~/prog/pwmon$ docker logs pwmon
-submitted at 2022-01-11 14:00:42.418491 return code 0
-```
-
 ## Getting data from New Relic
 
 ### Querying your data
@@ -84,6 +56,19 @@ Another sample query to build the `Power Distribution` chart, which displays all
 
 which looks like this:
 ![power distribution](images/power_distribution.png)
+
+### Using `OPT_GRID_STATUS_GAUGE`
+
+One of the optional gauges you can configure duplicates the Grid Status attribute as a gauge. We use [jrester/tesla_powerwall](https://github.com/jrester/tesla_powerwall)'s `GridStatus` enumeration, converted to integers, since gauges require numeric values. Therefore, you can query the Grid Status using the following mapping:
+
+```python
+UNKNOWN = 0
+CONNECTED = 1
+ISLANDED_READY = 2
+ISLANDED = 3
+TRANSITION_TO_GRID = 4
+TRANSITION_TO_ISLAND = 5
+```
 
 ### Creating a dashboard
 

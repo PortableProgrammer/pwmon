@@ -8,6 +8,7 @@ environment variable AS_SERVICE to something.
 import os
 import sys
 import time
+import enum
 from datetime import datetime as dt
 from pprint import pprint as pp
 
@@ -16,7 +17,7 @@ import tenacity
 from dotenv import load_dotenv
 from tesla_powerwall.powerwall import Powerwall
 from tesla_powerwall.const import MeterType
-from tesla_powerwall.responses import Meter
+from tesla_powerwall.responses import Meter, Battery
 
 
 ##### environment variables
@@ -25,30 +26,43 @@ load_dotenv('env.list', override=False)
 
 # this script expects these environment variables to be set
 # New Relic key
-INSIGHTS_API_KEY = os.environ.get('INSIGHTS_API_KEY')
+INSIGHTS_API_KEY = os.environ.get('INSIGHTS_API_KEY', '')
 
-# Weather lat/long and key
-WEATHER_LAT = os.environ.get('WEATHER_LAT')
-WEATHER_LON = os.environ.get('WEATHER_LON')
-WEATHER_KEY = os.environ.get('WEATHER_KEY')
+# Weather lat/long, units, and key
+WEATHER_LAT = os.environ.get('WEATHER_LAT', 0)
+WEATHER_LON = os.environ.get('WEATHER_LON', 0)
+WEATHER_UNITS = os.environ.get('WEATHER_UNITS', 'imperial')
+WEATHER_KEY = os.environ.get('WEATHER_KEY', '')
 
 # powerwall username
-PW_USER = os.environ.get('PW_USER')
+PW_USER = os.environ.get('PW_USER', '')
 
 # powerwall password
-PW_PASS = os.environ.get('PW_PASS')
+PW_PASS = os.environ.get('PW_PASS', '')
 
 # Am I running as a service?  Part of a hack to let me run via CLI.
-AS_SERVICE = os.environ.get('AS_SERVICE')
+AS_SERVICE = os.environ.get('AS_SERVICE', '')
 
 # How often does the script poll when run as a service?
-POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL'))
+POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL', 60))
 
 # powerwall hostname or IP.
 # The powerwall's self-signed certificate only responds to 
 # hostnamnes "powerwall", "teg", or "powerpack", and of course you have to have DNS set up properly.
 # IP addresses work, too.
-PW_ADDR =  os.environ.get("PW_ADDR")
+PW_ADDR =  os.environ.get("PW_ADDR", 'powerwall')
+
+# Optional Metrics
+#   Reserve Percent (enabled by default)
+#   Reserve Percent Available (enabled by default)
+#   Battery Charge in Wh
+#   Battery Capacity in Wh
+#   Grid Status as Gauge
+OPT_RESERVE_PCT = os.environ.get('OPT_RESERVE_PCT', True)
+OPT_RESERVE_PCT_AVAIL = os.environ.get('OPT_RESERVE_PCT_AVAIL', True)
+OPT_BATTERY_CHARGE_WH = os.environ.get('OPT_BATTERY_CHARGE_WH', False)
+OPT_BATTERY_CAPACITY_WH = os.environ.get('OPT_BATTERY_CAPACITY_WH', False)
+OPT_GRID_STATUS_GAUGE = os.environ.get('OPT_GRID_STATUS_GAUGE', False)
 
 ##### end environment variables
 
@@ -63,10 +77,22 @@ HEADER = {
 }
 ##### end constants
 
+##### Grid Status Enum for OPT_GRID_STATUS_GAUGE
+class GridStatus(enum.IntEnum):
+    UNKNOWN = 0
+    CONNECTED = 1
+    ISLANDED_READY = 2
+    ISLANDED = 3
+    TRANSITION_TO_GRID = 4
+    TRANSITION_TO_ISLAND = 5
+
+    def _missing(self, value):
+        return self.UNKNOWN
+##### end Grid Status Enum
 
 def get_now():
     """Return the current Unix timestamp in msec."""
-    return int(dt.timestamp(dt.today()) * 1000)
+    return int(time.time() * 1000)
 
 
 @tenacity.retry(stop=tenacity.stop_after_attempt(1),
@@ -108,7 +134,7 @@ def get_weather():
         'lat': WEATHER_LAT,
         'lon': WEATHER_LON,
         'appid': WEATHER_KEY,
-        'units': 'imperial',
+        'units': WEATHER_UNITS,
     }
     response = requests.get(
         url="http://api.openweathermap.org/data/2.5/weather", params=params)
@@ -138,8 +164,8 @@ def get_data():
             "interval.ms": POLL_INTERVAL * 1000,
             "attributes": {
                 "app.name": "solar",
-                "mode": pw.get_operation_mode().name.title(),
-                "status": pw.get_grid_status().name.title(),
+                "mode": pw.get_operation_mode().name.title().replace('_', ' '),
+                "status": pw.get_grid_status().name.title().replace('_', ' '),
                 "poll_timestamp": now,
             }
         },
@@ -153,9 +179,9 @@ def get_data():
     weather['sys']['sunrise'] *= 1000
     weather['sys']['sunset'] *= 1000
     if now > weather['sys']['sunrise'] and now < weather['sys']['sunset']:
-        is_daytime = True
+        is_daytime = 1
     else:
-        is_daytime = False
+        is_daytime = 0
 
     metric_data = {
         'solar': [
@@ -195,19 +221,52 @@ def get_data():
     data['metrics'].extend(make_meter_gauges('house', loadMeter, True))
     data['metrics'].extend(make_meter_gauges('battery', batteryMeter))
 
-    reserve = make_gauge('solar.reserve_pct',
-                         pw.get_backup_reserve_percentage())
-    data['metrics'].append(reserve)
+    # Add optional metrics
+    #   Reserve Percent (enabled by default)
+    #   Reserve Percent Available (enabled by default)
+    #   Battery Charge in Wh
+    #   Battery Capacity in Wh
+    #   Grid Status
 
-    tmp = round(pw.get_charge(), 1)
-    remaining = make_gauge(
-        'solar.pct_left_above_reserve', int(
-            tmp - pw.get_backup_reserve_percentage()))
-    data['metrics'].append(remaining)
+    if OPT_RESERVE_PCT:
+        reserve = make_gauge('solar.reserve_pct',
+                            pw.get_backup_reserve_percentage())
+        data['metrics'].append(reserve)
+
+    if OPT_RESERVE_PCT_AVAIL:
+        tmp = round(pw.get_charge(), 1)
+        remaining = make_gauge(
+            'solar.pct_left_above_reserve', int(
+                tmp - pw.get_backup_reserve_percentage()))
+        data['metrics'].append(remaining)
+
+    batteries: list[Battery] = []
+    if OPT_BATTERY_CHARGE_WH or OPT_BATTERY_CAPACITY_WH:
+        batteries = pw.get_batteries()
+    
+    if OPT_BATTERY_CHARGE_WH:
+        tmp = 0
+        for battery in batteries:
+            tmp = tmp + battery.energy_remaining
+
+        charge_Wh = make_gauge('solar.battery_charge_wh', tmp)
+        data['metrics'].append(charge_Wh)
+
+    if OPT_BATTERY_CAPACITY_WH:
+        tmp = 0
+        for battery in batteries:
+            tmp = tmp + battery.capacity
+
+        capacity = make_gauge('solar.battery_capacity_wh', tmp)
+        data['metrics'].append(capacity)
+
+    if OPT_GRID_STATUS_GAUGE:
+        grid_status = make_gauge('solar.grid_status', GridStatus[pw.get_grid_status().name].value)
+        data['metrics'].append(grid_status)
 
     return data
 
-def make_meter_gauges(name:str, meter:Meter, invertDirection:bool=False, type:str='gauge') -> list:
+def make_meter_gauges(name: str, meter: Meter, invertDirection: bool = False, type: str = 'gauge') -> list[dict]:
     """Return a list of gauges for a supplied Meter"""
     gauges = [
         make_gauge('solar.to_' + name, 0, type),
@@ -220,7 +279,7 @@ def make_meter_gauges(name:str, meter:Meter, invertDirection:bool=False, type:st
     return gauges
 
 
-def make_gauge(name, value, m_type='gauge'):
+def make_gauge(name: str, value: int | float, m_type: str = 'gauge') -> dict:
     """Return a dict for use as a gauge."""
     return {
         'name': name,
