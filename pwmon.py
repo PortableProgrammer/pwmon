@@ -20,7 +20,7 @@ from tesla_powerwall.const import MeterType
 from tesla_powerwall.responses import Meter, Battery
 
 
-##### environment variables
+# environment variables
 # load environment variables from a file if they're there
 load_dotenv('env.list', override=False)
 
@@ -47,10 +47,10 @@ AS_SERVICE = os.environ.get('AS_SERVICE', '')
 POLL_INTERVAL = int(os.environ.get('POLL_INTERVAL', 60))
 
 # powerwall hostname or IP.
-# The powerwall's self-signed certificate only responds to 
+# The powerwall's self-signed certificate only responds to
 # hostnamnes "powerwall", "teg", or "powerpack", and of course you have to have DNS set up properly.
 # IP addresses work, too.
-PW_ADDR =  os.environ.get("PW_ADDR", 'powerwall')
+PW_ADDR = os.environ.get("PW_ADDR", 'powerwall')
 
 # Optional Metrics
 #   Reserve Percent (enabled by default)
@@ -64,9 +64,9 @@ OPT_BATTERY_CHARGE_WH = os.environ.get('OPT_BATTERY_CHARGE_WH', False)
 OPT_BATTERY_CAPACITY_WH = os.environ.get('OPT_BATTERY_CAPACITY_WH', False)
 OPT_GRID_STATUS_GAUGE = os.environ.get('OPT_GRID_STATUS_GAUGE', False)
 
-##### end environment variables
+# end environment variables
 
-##### constants
+# constants
 # URL to post to
 URL = 'https://metric-api.newrelic.com/metric/v1'
 
@@ -75,9 +75,11 @@ HEADER = {
     'Content-Type': 'application/json',
     'Api-Key': INSIGHTS_API_KEY,
 }
-##### end constants
+# end constants
 
-##### Grid Status Enum for OPT_GRID_STATUS_GAUGE
+# Grid Status Enum for OPT_GRID_STATUS_GAUGE
+
+
 class GridStatus(enum.IntEnum):
     UNKNOWN = 0
     CONNECTED = 1
@@ -88,7 +90,8 @@ class GridStatus(enum.IntEnum):
 
     def _missing(self, value):
         return self.UNKNOWN
-##### end Grid Status Enum
+# end Grid Status Enum
+
 
 def get_now():
     """Return the current Unix timestamp in msec."""
@@ -110,6 +113,7 @@ def post_metrics(data):
 # tenacity is only really useful for pw
 #  because the gateway is very slow to respond
 #  and it has some absurdly low rate limit
+
 
 @tenacity.retry(stop=tenacity.stop_after_attempt(7),
                 wait=tenacity.wait_random(min=3, max=7))
@@ -230,7 +234,7 @@ def get_data():
 
     if OPT_RESERVE_PCT:
         reserve = make_gauge('solar.reserve_pct',
-                            pw.get_backup_reserve_percentage())
+                             pw.get_backup_reserve_percentage())
         data['metrics'].append(reserve)
 
     if OPT_RESERVE_PCT_AVAIL:
@@ -243,7 +247,7 @@ def get_data():
     batteries: list[Battery] = []
     if OPT_BATTERY_CHARGE_WH or OPT_BATTERY_CAPACITY_WH:
         batteries = pw.get_batteries()
-    
+
     if OPT_BATTERY_CHARGE_WH:
         tmp = 0
         for battery in batteries:
@@ -261,10 +265,12 @@ def get_data():
         data['metrics'].append(capacity)
 
     if OPT_GRID_STATUS_GAUGE:
-        grid_status = make_gauge('solar.grid_status', GridStatus[pw.get_grid_status().name].value)
+        grid_status = make_gauge(
+            'solar.grid_status', GridStatus[pw.get_grid_status().name].value)
         data['metrics'].append(grid_status)
 
     return data
+
 
 def make_meter_gauges(name: str, meter: Meter, invertDirection: bool = False, type: str = 'gauge') -> list[dict]:
     """Return a list of gauges for a supplied Meter"""
@@ -297,11 +303,27 @@ def run_from_cli():
 
 
 if __name__ == "__main__":
+    # If POLL_INTERVAL is a multiple of a minute, try to start at the beginning of the next minute
+    if POLL_INTERVAL % 60 == 0 and AS_SERVICE:
+        wait_time = 60 - time.localtime().tm_sec
+        print('Found minute intervals, delaying first iteration',
+              wait_time, 'seconds until the start of the next minute')
+        print()
+        time.sleep(wait_time)
+
     while True:
+        start = time.time()
         data = get_data()
         ret = post_metrics(data)
 
-        print('submitted at', dt.now(), "return code", ret)
+        print('Submitted at', dt.now())
+
         if not AS_SERVICE:
             run_from_cli()
-        time.sleep(POLL_INTERVAL)
+
+        # Try to position each loop exactly POLL_INTERVAL seconds apart.
+        # This is most useful when POLL_INTERVAL is an even division of a minute
+        elapsed = time.time() - start
+        if elapsed < 0 or elapsed > POLL_INTERVAL:
+            elapsed = 0
+        time.sleep(POLL_INTERVAL - elapsed)
