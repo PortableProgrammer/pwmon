@@ -319,11 +319,11 @@ if __name__ == "__main__":
         start = time.time()
         try:
             data = get_data()
-            ret = post_metrics(data)
+            #ret = post_metrics(data)
 
             print('Submitted at', dt.now())
         except APIError as apiEx:
-            print('Powerwall API Error: %s', apiEx)
+            print(apiEx)
             # If this is an HTTP 429, back off immediately for at least 5 minutes
             if str(apiEx).find('429: Too Many Requests') > 0:
                 FIVE_MINUTES = 5 * 60
@@ -332,7 +332,7 @@ if __name__ == "__main__":
                 backoffInterval = POLL_INTERVAL * 3
                 if backoffInterval < FIVE_MINUTES:
                     backoffInterval = FIVE_MINUTES
-                print('Backing off for %s seconds because of HTTP 429...', backoffInterval - elapsed)
+                print('Backing off for', round(backoffInterval - elapsed, 0), 'seconds because of HTTP 429.')
                 time.sleep(backoffInterval - elapsed)
                 # Determine if we need to wait until the start of the minute again
                 if POLL_INTERVAL % 60 == 0 and AS_SERVICE:
@@ -340,9 +340,8 @@ if __name__ == "__main__":
                     time.sleep(wait_time)
                     # Reset the start time to coincide with the top of the minute
                     start = time.time()
-                print('    Done.')
         except Exception as ex:
-            print('Failed to gather data: %s', ex)
+            print('Failed to gather data:', ex)
 
         if not AS_SERVICE:
             run_from_cli()
