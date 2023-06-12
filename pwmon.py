@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import enum
+import logging
 from datetime import datetime as dt
 from pprint import pprint as pp
 
@@ -298,57 +299,72 @@ def make_gauge(name: str, value: int | float, m_type: str = 'gauge') -> dict:
     }
 
 
-def run_from_cli():
+def run_from_cli(data):
     """Print data and exit. Useful when running the script from the CLI."""
     pp(data, compact=True)
     timestamp = data['common']['timestamp']
-    print(f'timestamp:\t{timestamp:_}')
+    logger.info('timestamp:\t%s', timestamp)
     sys.exit(0)
 
+logging.basicConfig(format='%(asctime)s %(name)s.%(funcName)s %(levelname)s: %(message)s',
+                    datefmt='[%Y-%m-%d %H:%M:%S]', level=logging.INFO)
+logger: logging.Logger = logging.getLogger('pwmon')
 
 if __name__ == "__main__":
-    # If POLL_INTERVAL is a multiple of a minute, try to start at the beginning of the next minute
-    if POLL_INTERVAL % 60 == 0 and AS_SERVICE:
-        wait_time = 60 - time.localtime().tm_sec
-        print('Found minute intervals, delaying first iteration',
-              wait_time, 'seconds until the start of the next minute')
-        print()
-        time.sleep(wait_time)
+    logger.info('Startup')
+    try: 
+        # If POLL_INTERVAL is a multiple of a minute, try to start at the beginning of the next minute
+        if POLL_INTERVAL % 60 == 0 and AS_SERVICE:
+            wait_time = 60 - time.localtime().tm_sec
+            logger.info('Found minute intervals, delaying first iteration %s seconds until the start of the next minute', wait_time)
+            time.sleep(wait_time)
 
-    while True:
-        start = time.time()
-        try:
-            data = get_data()
-            #ret = post_metrics(data)
+        while True:
+            start = time.time()
+            try:
+                data = get_data()
+                ret = post_metrics(data)
 
-            print('Submitted at', dt.now())
-        except APIError as apiEx:
-            print(apiEx)
-            # If this is an HTTP 429, back off immediately for at least 5 minutes
-            if str(apiEx).find('429: Too Many Requests') > 0:
-                FIVE_MINUTES = 5 * 60
-                elapsed = time.time() - start
-                # Back off for at least 3x POLL_INTERVAL, for a minimum of 5 minutes to allow things to cool down
-                backoffInterval = POLL_INTERVAL * 3
-                if backoffInterval < FIVE_MINUTES:
-                    backoffInterval = FIVE_MINUTES
-                print('Backing off for', round(backoffInterval - elapsed, 0), 'seconds because of HTTP 429.')
-                time.sleep(backoffInterval - elapsed)
-                # Determine if we need to wait until the start of the minute again
-                if POLL_INTERVAL % 60 == 0 and AS_SERVICE:
-                    wait_time = 60 - time.localtime().tm_sec
-                    time.sleep(wait_time)
-                    # Reset the start time to coincide with the top of the minute
-                    start = time.time()
-        except Exception as ex:
-            print('Failed to gather data:', ex)
+                logger.info('Submitted at %s', dt.now())
+            except APIError as apiEx:
+                logger.warning(apiEx)
+                # If this is an HTTP 429, back off immediately for at least 5 minutes
+                if str(apiEx).find('429: Too Many Requests') > 0:
+                    FIVE_MINUTES = 5 * 60
+                    elapsed = time.time() - start
+                    # Back off for at least 3x POLL_INTERVAL, for a minimum of 5 minutes to allow things to cool down
+                    backoffInterval = POLL_INTERVAL * 3
+                    if backoffInterval < FIVE_MINUTES:
+                        backoffInterval = FIVE_MINUTES
+                    logger.info('Backing off for %s seconds because of HTTP 429.', round(backoffInterval - elapsed, 0))
+                    time.sleep(backoffInterval - elapsed)
+                    # Determine if we need to wait until the start of the minute again
+                    if POLL_INTERVAL % 60 == 0 and AS_SERVICE:
+                        wait_time = 60 - time.localtime().tm_sec
+                        time.sleep(wait_time)
+                        # Reset the start time to coincide with the top of the minute
+                        start = time.time()
+            except (SystemExit, KeyboardInterrupt) as ex:
+                    logger.info('%s received; shutting down...',
+                                ex.__class__.__name__)
+                    break
+            except Exception as ex:
+                logger.warning('Failed to gather data: %s', ex)
+                logger.exception(ex)
 
-        if not AS_SERVICE:
-            run_from_cli()
+            if not AS_SERVICE:
+                run_from_cli(data)
 
-        # Try to position each loop exactly POLL_INTERVAL seconds apart.
-        # This is most useful when POLL_INTERVAL is an even division of a minute
-        elapsed = time.time() - start
-        if elapsed < 0 or elapsed > POLL_INTERVAL:
-            elapsed = 0
-        time.sleep(POLL_INTERVAL - elapsed)
+            # Try to position each loop exactly POLL_INTERVAL seconds apart.
+            # This is most useful when POLL_INTERVAL is an even division of a minute
+            elapsed = time.time() - start
+            if elapsed < 0 or elapsed > POLL_INTERVAL:
+                elapsed = 0
+            time.sleep(POLL_INTERVAL - elapsed)
+    except (SystemExit, KeyboardInterrupt) as ex:
+        logger.info('%s received; shutting down...',
+                    ex.__class__.__name__)
+    except Exception as ex:
+        logger.warning('Exception during main loop: %s', ex)
+        logger.exception(ex)
+    logger.info('Shutdown')
