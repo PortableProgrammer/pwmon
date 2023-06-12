@@ -15,6 +15,7 @@ from pprint import pprint as pp
 import requests
 import tenacity
 from dotenv import load_dotenv
+from tesla_powerwall.error import APIError
 from tesla_powerwall.powerwall import Powerwall
 from tesla_powerwall.const import MeterType
 from tesla_powerwall.responses import Meter, Battery
@@ -98,7 +99,8 @@ def get_now():
     return int(time.time() * 1000)
 
 
-@tenacity.retry(stop=tenacity.stop_after_attempt(1),
+@tenacity.retry(reraise=True,
+                stop=tenacity.stop_after_attempt(1),
                 wait=tenacity.wait_random(min=3, max=7))
 def post_metrics(data):
     """POST a block of data and headers to a URL."""
@@ -115,7 +117,8 @@ def post_metrics(data):
 #  and it has some absurdly low rate limit
 
 
-@tenacity.retry(stop=tenacity.stop_after_attempt(7),
+@tenacity.retry(reraise=True,
+                stop=tenacity.stop_after_attempt(7),
                 wait=tenacity.wait_random(min=3, max=7))
 def get_pw():
     """Return a Powerwall connection object."""
@@ -130,7 +133,8 @@ def connect():
     return pw, pw.get_meters()
 
 
-@tenacity.retry(stop=tenacity.stop_after_attempt(7),
+@tenacity.retry(reraise=True,
+                stop=tenacity.stop_after_attempt(7),
                 wait=tenacity.wait_random(min=3, max=7))
 def get_weather():
     """Return weather for a given lat/lon."""
@@ -313,10 +317,32 @@ if __name__ == "__main__":
 
     while True:
         start = time.time()
-        data = get_data()
-        ret = post_metrics(data)
+        try:
+            data = get_data()
+            ret = post_metrics(data)
 
-        print('Submitted at', dt.now())
+            print('Submitted at', dt.now())
+        except APIError as apiEx:
+            print('Powerwall API Error: %s', apiEx)
+            # If this is an HTTP 429, back off immediately for at least 5 minutes
+            if str(apiEx).find('429: Too Many Requests') > 0:
+                FIVE_MINUTES = 5 * 60
+                elapsed = time.time() - start
+                # Back off for at least 3x POLL_INTERVAL, for a minimum of 5 minutes to allow things to cool down
+                backoffInterval = POLL_INTERVAL * 3
+                if backoffInterval < FIVE_MINUTES:
+                    backoffInterval = FIVE_MINUTES
+                print('Backing off for %s seconds because of HTTP 429...', backoffInterval - elapsed)
+                time.sleep(backoffInterval - elapsed)
+                # Determine if we need to wait until the start of the minute again
+                if POLL_INTERVAL % 60 == 0 and AS_SERVICE:
+                    wait_time = 60 - time.localtime().tm_sec
+                    time.sleep(wait_time)
+                    # Reset the start time to coincide with the top of the minute
+                    start = time.time()
+                print('    Done.')
+        except Exception as ex:
+            print('Failed to gather data: %s', ex)
 
         if not AS_SERVICE:
             run_from_cli()
