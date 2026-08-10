@@ -1,3 +1,6 @@
 tenacity
-tesla_powerwall
+tesla_powerwall==0.4.0
 python-dotenv
+requests
+prometheus-client
+influxdb-client

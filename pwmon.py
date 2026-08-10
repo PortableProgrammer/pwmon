@@ -10,16 +10,26 @@ import sys
 import time
 import enum
 import logging
+from abc import ABC, abstractmethod
 from datetime import datetime as dt
 from pprint import pprint as pp
 
 import requests
 import tenacity
 from dotenv import load_dotenv
-from tesla_powerwall.error import APIError
-from tesla_powerwall.powerwall import Powerwall
-from tesla_powerwall.const import MeterType
-from tesla_powerwall.responses import Meter, Battery
+from prometheus_client import Gauge, CollectorRegistry, start_http_server
+from influxdb_client import InfluxDBClient, Point
+from influxdb_client.client.write_api import SYNCHRONOUS
+
+# tesla_powerwall is pinned in requirements.txt: 0.4.x is the last sync API
+# (0.5.0+ is async/aiohttp and would require rewriting all Powerwall calls)
+from tesla_powerwall import (
+    ApiError,
+    BatteryResponse,
+    MeterResponse,
+    MeterType,
+    Powerwall,
+)
 
 
 # environment variables
@@ -66,18 +76,19 @@ OPT_BATTERY_CHARGE_WH = os.environ.get('OPT_BATTERY_CHARGE_WH', False)
 OPT_BATTERY_CAPACITY_WH = os.environ.get('OPT_BATTERY_CAPACITY_WH', False)
 OPT_GRID_STATUS_GAUGE = os.environ.get('OPT_GRID_STATUS_GAUGE', False)
 
+# Multi-target export configuration
+EXPORTERS = os.environ.get('EXPORTERS', 'newrelic')
+
+# Prometheus configuration
+PROMETHEUS_PORT = int(os.environ.get('PROMETHEUS_PORT', 9090))
+
+# InfluxDB v2 configuration
+INFLUXDB_URL = os.environ.get('INFLUXDB_URL', '')
+INFLUXDB_TOKEN = os.environ.get('INFLUXDB_TOKEN', '')
+INFLUXDB_ORG = os.environ.get('INFLUXDB_ORG', '')
+INFLUXDB_BUCKET = os.environ.get('INFLUXDB_BUCKET', '')
+
 # end environment variables
-
-# constants
-# URL to post to
-URL = 'https://metric-api.newrelic.com/metric/v1'
-
-# header to go with it
-HEADER = {
-    'Content-Type': 'application/json',
-    'Api-Key': INSIGHTS_API_KEY,
-}
-# end constants
 
 # Grid Status Enum for OPT_GRID_STATUS_GAUGE
 
@@ -99,19 +110,6 @@ def get_now():
     """Return the current Unix timestamp in msec."""
     return int(time.time() * 1000)
 
-
-@tenacity.retry(reraise=True,
-                stop=tenacity.stop_after_attempt(1),
-                wait=tenacity.wait_random(min=3, max=7))
-def post_metrics(data):
-    """POST a block of data and headers to a URL."""
-
-    response = requests.post(URL, json=[data], headers=HEADER)
-    status = response.status_code
-    if status == 202:
-        return 0
-    else:
-        raise Exception(f'return code is {status}')
 
 # tenacity is only really useful for pw
 #  because the gateway is very slow to respond
@@ -249,7 +247,7 @@ def get_data():
                 tmp - pw.get_backup_reserve_percentage()))
         data['metrics'].append(remaining)
 
-    batteries: list[Battery] = []
+    batteries: list[BatteryResponse] = []
     if OPT_BATTERY_CHARGE_WH or OPT_BATTERY_CAPACITY_WH:
         batteries = pw.get_batteries()
 
@@ -277,7 +275,7 @@ def get_data():
     return data
 
 
-def make_meter_gauges(name: str, meter: Meter, invertDirection: bool = False, type: str = 'gauge') -> list[dict]:
+def make_meter_gauges(name: str, meter: MeterResponse, invertDirection: bool = False, type: str = 'gauge') -> list[dict]:
     """Return a list of gauges for a supplied Meter"""
     gauges = [
         make_gauge('solar.to_' + name, 0, type),
@@ -306,13 +304,220 @@ def run_from_cli(data):
     logger.info('timestamp:\t%s', timestamp)
     sys.exit(0)
 
+
+# Multi-Target Export Architecture
+
+class BaseExporter(ABC):
+    """Abstract base class for metric exporters."""
+
+    @abstractmethod
+    def validate_config(self):
+        """Validate required env vars. Raise ValueError if missing."""
+        pass
+
+    @abstractmethod
+    def export(self, data: dict):
+        """Transform and export metrics."""
+        pass
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Return exporter name for logging."""
+        pass
+
+
+class NewRelicExporter(BaseExporter):
+    """Export metrics to New Relic via Metrics API."""
+
+    def __init__(self):
+        self.url = 'https://metric-api.newrelic.com/metric/v1'
+        self.header = {
+            'Content-Type': 'application/json',
+            'Api-Key': INSIGHTS_API_KEY,
+        }
+
+    @property
+    def name(self) -> str:
+        return "newrelic"
+
+    def validate_config(self):
+        """Validate New Relic API key is configured."""
+        if not INSIGHTS_API_KEY:
+            raise ValueError("INSIGHTS_API_KEY not configured")
+
+    @tenacity.retry(reraise=True,
+                    stop=tenacity.stop_after_attempt(1),
+                    wait=tenacity.wait_random(min=3, max=7))
+    def export(self, data: dict):
+        """POST metrics to New Relic."""
+        response = requests.post(self.url, json=[data], headers=self.header)
+        status = response.status_code
+        if status != 202:
+            raise Exception(f'return code is {status}')
+
+
+class PrometheusExporter(BaseExporter):
+    """Export metrics to Prometheus via HTTP /metrics endpoint."""
+
+    def __init__(self):
+        self.registry = CollectorRegistry()
+        self.gauges = {}  # metric name -> Gauge object
+        self.http_server_started = False
+        # Gauges keep their last value between scrapes, so a dead Powerwall
+        # poll is invisible to `up`; alert on this timestamp going stale.
+        self.last_success = Gauge(
+            'pwmon_last_success_timestamp_seconds',
+            'Unix time of the last successful collect-and-export cycle',
+            registry=self.registry)
+        # mode/status ride as info-style metrics rather than labels on every
+        # gauge: labels would fork every series' identity on each mode change
+        # and leave stale label combinations behind.
+        self.mode_info = Gauge(
+            'pwmon_operation_mode_info',
+            'Current Powerwall operation mode (value is always 1)',
+            labelnames=['mode'],
+            registry=self.registry)
+        self.grid_status_info = Gauge(
+            'pwmon_grid_status_info',
+            'Current grid status (value is always 1)',
+            labelnames=['status'],
+            registry=self.registry)
+
+    @property
+    def name(self) -> str:
+        return "prometheus"
+
+    def validate_config(self):
+        """Validate Prometheus port is configured."""
+        if not PROMETHEUS_PORT:
+            raise ValueError("PROMETHEUS_PORT not configured")
+
+    def export(self, data: dict):
+        """Update Prometheus gauges and start HTTP server if needed."""
+        # Start HTTP server on first export (lazy init)
+        if not self.http_server_started:
+            start_http_server(PROMETHEUS_PORT, registry=self.registry)
+            self.http_server_started = True
+            logger.info(f'Prometheus HTTP server started on port {PROMETHEUS_PORT}')
+
+        # clear() drops stale label values so only the current mode/status
+        # series exists at any scrape
+        common_attrs = data['common']['attributes']
+        self.mode_info.clear()
+        self.mode_info.labels(mode=common_attrs.get('mode', '')).set(1)
+        self.grid_status_info.clear()
+        self.grid_status_info.labels(status=common_attrs.get('status', '')).set(1)
+
+        # Update or create gauges for each metric
+        for metric in data['metrics']:
+            metric_name = metric['name'].replace('.', '_')
+
+            if metric_name not in self.gauges:
+                self.gauges[metric_name] = Gauge(
+                    metric_name,
+                    f'pwmon metric {metric["name"]}',
+                    registry=self.registry
+                )
+
+            self.gauges[metric_name].set(metric['value'])
+
+        self.last_success.set_to_current_time()
+
+
+class InfluxDBExporter(BaseExporter):
+    """Export metrics to InfluxDB v2 via line protocol."""
+
+    def __init__(self):
+        self.client = None
+        self.write_api = None
+
+    @property
+    def name(self) -> str:
+        return "influxdb"
+
+    def validate_config(self):
+        """Validate InfluxDB credentials and initialize client."""
+        if not INFLUXDB_URL:
+            raise ValueError("INFLUXDB_URL not configured")
+        if not INFLUXDB_TOKEN:
+            raise ValueError("INFLUXDB_TOKEN not configured")
+        if not INFLUXDB_ORG:
+            raise ValueError("INFLUXDB_ORG not configured")
+        if not INFLUXDB_BUCKET:
+            raise ValueError("INFLUXDB_BUCKET not configured")
+
+        # Initialize client
+        self.client = InfluxDBClient(
+            url=INFLUXDB_URL,
+            token=INFLUXDB_TOKEN,
+            org=INFLUXDB_ORG
+        )
+        self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
+
+    @tenacity.retry(reraise=True,
+                    stop=tenacity.stop_after_attempt(3),
+                    wait=tenacity.wait_random(min=1, max=3))
+    def export(self, data: dict):
+        """Convert to InfluxDB line protocol and write."""
+        timestamp = data['common']['timestamp'] * 1000000  # Convert ms to ns
+        common_attrs = data['common']['attributes']
+
+        points = []
+        for metric in data['metrics']:
+            # Parse metric name: 'solar.battery_charge_pct' -> measurement='solar', field='battery_charge_pct'
+            parts = metric['name'].split('.', 1)
+            if len(parts) == 2:
+                measurement, field = parts
+            else:
+                measurement = 'pwmon'
+                field = metric['name']
+
+            point = Point(measurement) \
+                .tag('mode', common_attrs.get('mode', '')) \
+                .tag('status', common_attrs.get('status', '')) \
+                .field(field, metric['value']) \
+                .time(timestamp)
+
+            points.append(point)
+
+        # Write all points in batch
+        self.write_api.write(bucket=INFLUXDB_BUCKET, record=points)
+
+
+def get_enabled_exporters() -> list[BaseExporter]:
+    """Return list of enabled exporters based on EXPORTERS env var."""
+    exporters_str = EXPORTERS
+    exporter_classes = {
+        'newrelic': NewRelicExporter,
+        'prometheus': PrometheusExporter,
+        'influxdb': InfluxDBExporter,
+    }
+    exporters = []
+    for name in exporters_str.split(','):
+        name = name.strip().lower()
+        if name in exporter_classes:
+            try:
+                exporter = exporter_classes[name]()
+                exporter.validate_config()
+                exporters.append(exporter)
+                logger.info(f'Enabled exporter: {exporter.name}')
+            except ValueError as e:
+                logger.error(f'{name}: {e}')
+                sys.exit(1)
+        else:
+            logger.warning(f'Unknown exporter: {name}')
+    return exporters
+
 logging.basicConfig(format='%(asctime)s %(name)s.%(funcName)s %(levelname)s: %(message)s',
                     datefmt='[%Y-%m-%d %H:%M:%S]', level=logging.INFO)
 logger: logging.Logger = logging.getLogger('pwmon')
 
 if __name__ == "__main__":
     logger.info('Startup')
-    try: 
+    exporters = get_enabled_exporters()
+
+    try:
         # If POLL_INTERVAL is a multiple of a minute, try to start at the beginning of the next minute
         if POLL_INTERVAL % 60 == 0 and AS_SERVICE:
             wait_time = 60 - time.localtime().tm_sec
@@ -323,10 +528,18 @@ if __name__ == "__main__":
             start = time.time()
             try:
                 data = get_data()
-                ret = post_metrics(data)
+
+                # Export to all enabled targets
+                for exporter in exporters:
+                    try:
+                        exporter.export(data)
+                        logger.info(f'{exporter.name}: export successful')
+                    except Exception as ex:
+                        logger.warning(f'{exporter.name}: export failed - {ex}')
+                        logger.exception(ex)
 
                 logger.info('Submitted at %s', dt.now())
-            except APIError as apiEx:
+            except ApiError as apiEx:
                 logger.warning(apiEx)
                 # If this is an HTTP 429, back off immediately for at least 5 minutes
                 if str(apiEx).find('429: Too Many Requests') > 0:

@@ -6,4 +6,5 @@ ADD ./requirements.txt /tmp
 RUN python3 -m pip install -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
 ADD ./pwmon.py /
+EXPOSE 9090
 CMD ["/pwmon.py"]

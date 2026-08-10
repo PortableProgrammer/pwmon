@@ -39,6 +39,98 @@ submitted at 2022-01-11 08:57:20.332818 return code 0
 ...
 ```
 
+## Multi-Target Export
+
+`pwmon` can export metrics to multiple monitoring systems simultaneously.
+
+### Supported Targets
+
+- **New Relic** (push-based): Cloud monitoring platform
+- **Prometheus** (pull-based): Scrapes `/metrics` endpoint
+- **InfluxDB v2** (push-based): Time-series database
+
+### Configuration
+
+Enable exporters via the `EXPORTERS` environment variable:
+
+```bash
+# Single exporter
+EXPORTERS=prometheus
+
+# Multiple exporters (comma-separated)
+EXPORTERS=newrelic,prometheus,influxdb
+```
+
+**Backward compatibility:** If `EXPORTERS` is not set, defaults to New Relic only.
+
+### Prometheus Configuration
+
+Set the HTTP server port:
+```bash
+PROMETHEUS_PORT=9090
+```
+
+Prometheus will scrape `http://pwmon:9090/metrics`. Example `prometheus.yml`:
+```yaml
+scrape_configs:
+  - job_name: 'powerwall'
+    static_configs:
+      - targets: ['pwmon:9090']
+    scrape_interval: 60s
+```
+
+### InfluxDB Configuration
+
+Configure InfluxDB v2 credentials:
+```bash
+INFLUXDB_URL=http://influxdb:8086
+INFLUXDB_TOKEN=your_token
+INFLUXDB_ORG=myorg
+INFLUXDB_BUCKET=solar
+```
+
+Data is written with:
+- **Measurement names**: `solar`, `weather`, etc. (from metric prefix)
+- **Tags**: `mode`, `status` (from common attributes)
+- **Fields**: Metric values (e.g., `battery_charge_pct=85.0`)
+
+### Docker Compose Example
+
+```yaml
+version: '3'
+services:
+  pwmon:
+    build: .
+    env_file: env.list
+    ports:
+      - "9090:9090"  # Prometheus metrics
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9091:9090"
+
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=password
+      - DOCKER_INFLUXDB_INIT_ORG=myorg
+      - DOCKER_INFLUXDB_INIT_BUCKET=solar
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=mytoken
+```
+
+If using Prometheus, expose the metrics port in your Dockerfile:
+```dockerfile
+EXPOSE 9090
+```
+
 ## Getting data from New Relic
 
 ### Querying your data
