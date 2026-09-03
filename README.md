@@ -1,5 +1,13 @@
 # pwmon
 
+> **Retired 2026-09-03 — this fork is archived.** It was replaced by
+> [whi-hq/powerwall-exporter](https://github.com/whi-hq/powerwall-exporter), a
+> greenfield Prometheus exporter for the Tesla Powerwall (scrape-time collection,
+> signed power gauges, Wh counters, OpenWeatherMap conditions) that supersedes the
+> New Relic push model below rather than porting it. The `spike/multi-exporter`
+> branch here was the exploration that led to it. Nothing reads or writes New Relic
+> any more; the code is kept as-is for reference only.
+
 _forked from [eosborne-newrelic/pwmon](https://github.com/eosborne-newrelic/pwmon)_
 
 `pwmon.py` is a quick and dirty python script to demonstrate how to pull information from the Tesla Powerwall API and push it up to New Relic. I use it on my home solar system. If you want to use the weather bits you need to create an account at [openweathermap.org](https://openweathermap.org/).  
